@@ -1,4 +1,5 @@
 {
+  "id": "hyf-content-tracker",
   "name": "HYF Content Tracker",
   "short_name": "HYF Tracker",
   "description": "Huntley Youth Football posts, emails and reminders",
@@ -8,7 +9,7 @@
   "background_color": "#0d0d12",
   "theme_color": "#0d0d12",
   "icons": [
-    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
-    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+    { "src": "icons/hyf-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/hyf-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
   ]
 }
