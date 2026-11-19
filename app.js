@@ -115,6 +115,10 @@ async function reload() {
   if (S.modal && S.modal.type === "item" && S.modal.id) renderNotesBox();
 }
 const reloadSoon = debounce(reload, 350);
+async function autoDone() {
+  const r = await sb.from("hyf_items").update({ status: "done" }).eq("status", "scheduled").lte("scheduled_at", new Date().toISOString()).select("id");
+  if (!r.error && r.data && r.data.length) reload();
+}
 
 function decorate() {
   const tagById = new Map(S.tags.map((t) => [t.id, t]));
@@ -182,14 +186,15 @@ async function startApp() {
     <div id="banner"></div>
     <div id="bar"></div>
     <div id="list"><div class="empty spin">Loading…</div></div>
-    <div class="note">Mark items Done when posted or sent, Archive to tuck them away, or Remove to drop them (Removed items can be restored). Alerts appear here and as notifications while this page is open.</div>
+    <div class="note">Mark items Scheduled once they are queued up in your posting or email tool. They flip to Done by themselves when their time passes. Mark Done when posted by hand, Archive to tuck them away, or Remove to drop them (Removed items can be restored). Alerts appear here and as notifications while this page is open.</div>
   </div>`;
   $("#q").addEventListener("input", debounce((e) => { S.q = e.target.value; renderList(); }, 120));
   renderMe();
   await reload();
   subscribe();
-  if (!startApp.timer) startApp.timer = setInterval(() => { if (S.loaded && S.me) { renderBanner(); renderList(); checkAlerts(); } }, 30000);
+  if (!startApp.timer) startApp.timer = setInterval(() => { if (S.loaded && S.me) { renderBanner(); renderList(); checkAlerts(); autoDone(); } }, 30000);
   checkAlerts();
+  autoDone();
 }
 function subscribe() {
   if (S.channel) return;
@@ -219,13 +224,13 @@ function renderMenu() {
 
 // ---------- banner / bar ----------
 function cls(it) {
-  if (it.status !== "scheduled") return it.status;
+  if (it.status !== "todo") return it.status;
   const ms = new Date(it.scheduled_at) - Date.now();
   return ms <= 0 ? "due" : ms <= 3 * 3600e3 ? "soon" : "";
 }
 function renderBanner() {
   const el = $("#banner"); if (!el) return;
-  const sched = S.items.filter((i) => i.status === "scheduled").sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at));
+  const sched = S.items.filter((i) => i.status === "todo").sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at));
   const due = sched.filter((i) => new Date(i.scheduled_at) <= Date.now());
   document.title = (due.length ? `(${due.length}) ` : "") + "HYF Content Tracker";
   if (due.length) {
@@ -249,7 +254,7 @@ function renderBar() {
   const el = $("#bar"); if (!el) return;
   const base = S.items.filter(passFilters);
   const count = (s) => base.filter((i) => i.status === s).length;
-  const tabs = [["todo", "To do", count("scheduled")], ["done", "Done", count("done")], ["archived", "Archived", count("archived")], ["removed", "Removed", count("removed")], ["all", "All", base.length]];
+  const tabs = [["todo", "To do", count("todo")], ["scheduled", "Scheduled", count("scheduled")], ["done", "Done", count("done")], ["archived", "Archived", count("archived")], ["removed", "Removed", count("removed")], ["all", "All", base.length]];
   const people = members();
   el.innerHTML = `
   <div class="bar">
@@ -279,12 +284,12 @@ function peopleHtml(it) {
 }
 function cardHtml(it, why) {
   const c = cls(it), open = S.open.has(it.id);
-  const relTag = it.status === "scheduled" ? `<span class="rel ${c}">${rel(it.scheduled_at)}</span>` : `<span class="rel">${it.status}</span>`;
-  const acts = it.status === "scheduled"
-    ? `<button class="btn ok sm" data-a="status" data-s="done" data-id="${it.id}">✓ Mark done</button><button class="btn sm" data-a="status" data-s="archived" data-id="${it.id}">Archive</button><button class="btn sm" data-a="status" data-s="removed" data-id="${it.id}">Remove</button>`
+  const relTag = it.status === "todo" ? `<span class="rel ${c}">${rel(it.scheduled_at)}</span>` : it.status === "scheduled" ? `<span class="rel sched">📅 scheduled · goes out ${rel(it.scheduled_at)}</span>` : `<span class="rel">${it.status}</span>`;
+  const acts = it.status === "todo"
+    ? `<button class="btn sched sm" data-a="status" data-s="scheduled" data-id="${it.id}">📅 Mark scheduled</button><button class="btn ok sm" data-a="status" data-s="done" data-id="${it.id}">✓ Mark done</button><button class="btn sm" data-a="status" data-s="archived" data-id="${it.id}">Archive</button><button class="btn sm" data-a="status" data-s="removed" data-id="${it.id}">Remove</button>`
     : it.status === "removed"
-      ? `<button class="btn sm" data-a="status" data-s="scheduled" data-id="${it.id}">Restore</button>${isAdmin() ? `<button class="btn sm danger" data-a="purge" data-id="${it.id}">Delete forever</button>` : ""}`
-      : `<button class="btn sm" data-a="status" data-s="scheduled" data-id="${it.id}">Move back to To do</button><button class="btn sm" data-a="status" data-s="removed" data-id="${it.id}">Remove</button>`;
+      ? `<button class="btn sm" data-a="status" data-s="todo" data-id="${it.id}">Restore</button>${isAdmin() ? `<button class="btn sm danger" data-a="purge" data-id="${it.id}">Delete forever</button>` : ""}`
+      : `<button class="btn sm" data-a="status" data-s="todo" data-id="${it.id}">Move back to To do</button><button class="btn sm" data-a="status" data-s="removed" data-id="${it.id}">Remove</button>`;
   const vars = open ? (it.variants || []).map((v, vi) => `<div class="var"><h4><span>${esc(v.label)}</span><button class="btn sm" data-a="copy" data-id="${it.id}" data-vi="${vi}">Copy</button></h4><pre>${esc(v.text)}</pre></div>`).join("") : "";
   const nn = it.notesList.length;
   return `<div class="card ${c}" id="c-${it.id}">
@@ -310,8 +315,7 @@ function renderList() {
   const q = S.q.trim();
   if (q) return renderSearch(el, q);
   let list = S.items.filter(passFilters);
-  if (S.tab === "todo") list = list.filter((i) => i.status === "scheduled");
-  else if (S.tab !== "all") list = list.filter((i) => i.status === S.tab);
+  if (S.tab !== "all") list = list.filter((i) => i.status === S.tab);
   list.sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at));
   el.innerHTML = list.length ? list.map((i) => cardHtml(i)).join("") : `<div class="empty">Nothing here.</div>`;
 }
@@ -367,7 +371,7 @@ function syncDraft() {
 function itemSheet() {
   const m = S.modal, d = m.draft, it = m.id ? S.items.find((x) => x.id === m.id) : null;
   const people = members();
-  const statusBtns = it ? `<div class="row2" style="margin-top:14px">${it.status !== "done" ? `<button class="btn ok sm" data-a="mstatus" data-s="done">✓ Mark done</button>` : ""}${it.status !== "scheduled" ? `<button class="btn sm" data-a="mstatus" data-s="scheduled">Move to To do</button>` : ""}${it.status !== "archived" ? `<button class="btn sm" data-a="mstatus" data-s="archived">Archive</button>` : ""}${it.status !== "removed" ? `<button class="btn sm" data-a="mstatus" data-s="removed">Remove</button>` : ""}${isAdmin() ? `<button class="btn sm danger" data-a="mpurge">Delete forever</button>` : ""}</div>` : "";
+  const statusBtns = it ? `<div class="row2" style="margin-top:14px">${it.status !== "done" ? `<button class="btn ok sm" data-a="mstatus" data-s="done">✓ Mark done</button>` : ""}${it.status !== "scheduled" ? `<button class="btn sched sm" data-a="mstatus" data-s="scheduled">📅 Mark scheduled</button>` : ""}${it.status !== "todo" ? `<button class="btn sm" data-a="mstatus" data-s="todo">Move to To do</button>` : ""}${it.status !== "archived" ? `<button class="btn sm" data-a="mstatus" data-s="archived">Archive</button>` : ""}${it.status !== "removed" ? `<button class="btn sm" data-a="mstatus" data-s="removed">Remove</button>` : ""}${isAdmin() ? `<button class="btn sm danger" data-a="mpurge">Delete forever</button>` : ""}</div>` : "";
   return `
   <div class="hd"><h2>${it ? "Edit post / email" : "New post / email"}</h2><button class="btn sm" data-a="close">✕</button></div>
   <label>Title</label><input id="f_title" value="${esc(d.title)}" placeholder="e.g. Picture Day reminder">
@@ -527,7 +531,7 @@ async function importSeed() {
 // ---------- alerts ----------
 function checkAlerts() {
   if (!S.me || !S.loaded) return;
-  const due = S.items.filter((i) => i.status === "scheduled" && new Date(i.scheduled_at) <= Date.now() && !S.alerted.has(i.id) && (!i.assignee_id || i.assignee_id === S.me.id));
+  const due = S.items.filter((i) => i.status === "todo" && new Date(i.scheduled_at) <= Date.now() && !S.alerted.has(i.id) && (!i.assignee_id || i.assignee_id === S.me.id));
   for (const i of due) {
     S.alerted.add(i.id);
     toast("Due now: " + i.title);

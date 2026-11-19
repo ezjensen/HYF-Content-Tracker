@@ -130,3 +130,7 @@ pre{white-space:pre-wrap;word-wrap:break-word;margin:0;background:#12121a;border
 .center{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;text-align:center}
 .center .box{max-width:420px}
 .spin{color:var(--mut)}
+
+.btn.sched{background:#1c2a44;border-color:#3b5fa8;color:#cfe0ff}
+.rel.sched{background:#1c2a44;color:#cfe0ff}
+.card.scheduled{border-left-color:#3b82f6}
