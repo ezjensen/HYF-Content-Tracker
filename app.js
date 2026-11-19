@@ -422,7 +422,7 @@ async function saveItem() {
   try {
     let id = m.id;
     if (id) { const r = await sb.from("hyf_items").update(row).eq("id", id); if (r.error) throw r.error; }
-    else { row.created_by = S.me.id; const r = await sb.from("hyf_items").insert(row).select("id").single(); if (r.error) throw r.error; id = r.data.id; }
+    else { row.created_by = S.me.id; row.status = "todo"; const r = await sb.from("hyf_items").insert(row).select("id").single(); if (r.error) throw r.error; id = r.data.id; }
     await syncItemTags(id, d.tags);
     await syncJoin("hyf_item_people", "item_id", id, "profile_id", [...d.people], S.itemPeople.filter((x) => x.item_id === id).map((x) => x.profile_id));
     closeModal(); await reload(); toast("Saved");
