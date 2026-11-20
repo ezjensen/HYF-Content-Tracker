@@ -277,7 +277,9 @@ function renderBar() {
 // ---------- list / cards ----------
 function peopleHtml(it) {
   const a = profById(it.assignee_id);
-  const first = a ? `<span class="person" data-a="person" data-id="${a.id}" title="Assigned to">${avatar(a, 22)} ${esc(pName(a))}</span>` : `<span class="person unassigned" data-a="edit" data-id="${it.id}">+ Assign</span>`;
+  const first = a
+    ? `<span class="person" data-a="person" data-id="${a.id}" title="Assigned to">${avatar(a, 22)} ${esc(pName(a))}</span><button class="person assignbtn reassign" data-a="assign" data-id="${it.id}" title="Change assignee" aria-label="Change assignee">✎</button>`
+    : `<button class="person unassigned assignbtn" data-a="assign" data-id="${it.id}">+ Assign</button>`;
   const others = it.peopleIds.filter((id) => id !== it.assignee_id).map((id) => profById(id)).filter(Boolean)
     .map((p) => `<span class="person" data-a="person" data-id="${p.id}" title="Tagged">${avatar(p, 22)} ${esc(pName(p))}</span>`).join("");
   return `<div class="people">${first}${others}</div>`;
@@ -338,12 +340,18 @@ function renderSearch(el, q) {
 }
 
 // ---------- modals ----------
-function closeModal() { S.modal = null; modalHost.innerHTML = ""; }
+function closeModal() { const m = S.modal; if (m) clearTimeout(m.timer); S.modal = null; modalHost.innerHTML = ""; }
+// Every modal is a sheet with a fixed header (title + actions) and a scrolling body.
+const sheetHead = (title, extra = "") => `<div class="hd"><h2>${title}</h2>${extra}<button class="btn sm" data-a="close" title="Close" aria-label="Close">✕</button></div>`;
 function renderModal() {
   const m = S.modal; if (!m) { modalHost.innerHTML = ""; return; }
-  modalHost.innerHTML = `<div class="ov" data-a="ovclick"><div class="sheet" id="sheet">${m.type === "item" ? itemSheet() : m.type === "profile" ? profileSheet() : teamSheet()}</div></div>`;
+  const keep = $("#sbody")?.scrollTop || 0; // re-renders (add tag, add version…) shouldn't jump back to the top
+  const s = m.type === "item" ? itemSheet() : m.type === "profile" ? profileSheet() : teamSheet();
+  modalHost.innerHTML = `<div class="ov" data-a="ovclick"><div class="sheet" id="sheet"><div class="shead">${s.head}</div><div class="sbody" id="sbody">${s.body}</div></div></div>`;
+  if (keep) $("#sbody").scrollTop = keep;
   if (m.type === "item" && m.id) renderNotesBox();
 }
+const cloneDraft = (d) => ({ ...d, people: new Set(d.people), tags: [...d.tags], variants: d.variants.map((v) => ({ ...v })) });
 function openItem(id) {
   const it = id ? S.items.find((x) => x.id === id) : null;
   let d;
@@ -355,25 +363,38 @@ function openItem(id) {
     d = { title: "", kind: "social", date: c.date, time: "18:00", channels: "FB, IG", assignee_id: S.me.id, people: new Set(), tags: [], variants: [{ label: "Facebook / Instagram", text: "" }] };
   }
   S.modal = { type: "item", id: id || null, draft: d };
+  // Existing records autosave: `original` lets Cancel undo what was autosaved in this window.
+  if (it) Object.assign(S.modal, { original: cloneDraft(d), dirty: false, changed: false, chain: Promise.resolve(), timer: null, state: "", stateKind: "" });
   renderModal();
 }
-function syncDraft() {
-  const m = S.modal; if (!m || m.type !== "item") return;
+/** Copy the form fields into the draft. Pass consumeTag=false (autosave) to leave a half-typed tag alone. Returns true if a pending tag was added. */
+function syncDraft(consumeTag = true) {
+  const m = S.modal; if (!m || m.type !== "item" || !$("#f_title")) return false;
   const g = (id) => $("#" + id)?.value ?? "";
   const d = m.draft;
+  let added = false;
   d.title = g("f_title"); d.kind = g("f_kind"); d.channels = g("f_channels"); d.date = g("f_date"); d.time = g("f_time"); d.assignee_id = g("f_assignee");
   d.people = new Set([...document.querySelectorAll('input[name="ppl"]:checked')].map((x) => x.value));
-  const pend = g("f_tagin").trim().replace(/^#/, "").replace(/,$/, "");
-  if (pend && !d.tags.some((t) => t.toLowerCase() === pend.toLowerCase())) d.tags.push(pend);
-  if ($("#f_tagin")) $("#f_tagin").value = "";
+  if (consumeTag) {
+    const pend = g("f_tagin").trim().replace(/^#/, "").replace(/,$/, "");
+    if (pend && !d.tags.some((t) => t.toLowerCase() === pend.toLowerCase())) { d.tags.push(pend); added = true; }
+    if ($("#f_tagin")) $("#f_tagin").value = "";
+  }
   d.variants = [...document.querySelectorAll(".varedit")].map((el) => ({ label: el.querySelector(".vl").value, text: el.querySelector(".vt").value }));
+  return added;
 }
+const tagChipHtml = (t, i) => `<span class="tagchip">#${esc(t)}<button data-a="deltag" data-i="${i}" aria-label="Remove tag">×</button></span>`;
 function itemSheet() {
   const m = S.modal, d = m.draft, it = m.id ? S.items.find((x) => x.id === m.id) : null;
   const people = members();
-  const statusBtns = it ? `<div class="row2" style="margin-top:14px">${it.status !== "done" ? `<button class="btn ok sm" data-a="mstatus" data-s="done">✓ Mark done</button>` : ""}${it.status !== "scheduled" ? `<button class="btn sched sm" data-a="mstatus" data-s="scheduled">📅 Mark scheduled</button>` : ""}${it.status !== "todo" ? `<button class="btn sm" data-a="mstatus" data-s="todo">Move to To do</button>` : ""}${it.status !== "archived" ? `<button class="btn sm" data-a="mstatus" data-s="archived">Archive</button>` : ""}${it.status !== "removed" ? `<button class="btn sm" data-a="mstatus" data-s="removed">Remove</button>` : ""}${isAdmin() ? `<button class="btn sm danger" data-a="mpurge">Delete forever</button>` : ""}</div>` : "";
-  return `
-  <div class="hd"><h2>${it ? "Edit post / email" : "New post / email"}</h2><button class="btn sm" data-a="close">✕</button></div>
+  const acts = `<div class="hacts">
+    <button class="btn pri sm" data-a="saveitem">Save</button>
+    <button class="btn sm" data-a="cancelitem" title="${it ? "Undo the changes made in this window and close" : "Discard and close"}">Cancel</button>
+    ${it ? `${it.status !== "done" ? `<button class="btn ok sm" data-a="mstatus" data-s="done">✓ Mark done</button>` : ""}${it.status !== "scheduled" ? `<button class="btn sched sm" data-a="mstatus" data-s="scheduled">📅 Mark scheduled</button>` : ""}${it.status !== "todo" ? `<button class="btn sm" data-a="mstatus" data-s="todo">Move to To do</button>` : ""}${it.status !== "archived" ? `<button class="btn sm" data-a="mstatus" data-s="archived">Archive</button>` : ""}${it.status !== "removed" ? `<button class="btn sm" data-a="mstatus" data-s="removed">Remove</button>` : ""}${isAdmin() ? `<button class="btn sm danger" data-a="mpurge">Delete forever</button>` : ""}` : ""}
+  </div>`;
+  const state = it ? `<span class="savestate ${m.stateKind || ""}" id="saveState">${esc(m.state || "Autosaves")}</span>` : "";
+  const head = sheetHead(it ? "Edit post / email" : "New post / email", state) + acts;
+  const body = `
   <label>Title</label><input id="f_title" value="${esc(d.title)}" placeholder="e.g. Picture Day reminder">
   <div class="grid2">
     <div><label>Type</label><select id="f_kind"><option value="social" ${d.kind === "social" ? "selected" : ""}>Social post</option><option value="email" ${d.kind === "email" ? "selected" : ""}>Email</option></select></div>
@@ -386,15 +407,14 @@ function itemSheet() {
   <label>Also tag people</label>
   <div class="pick">${people.map((p) => `<label><input type="checkbox" name="ppl" value="${p.id}" ${d.people.has(p.id) ? "checked" : ""}>${avatar(p, 20)} ${esc(pName(p))}</label>`).join("") || `<span style="color:var(--mut)">No team members yet.</span>`}</div>
   <label>Tags</label>
-  <div class="tagbox">${d.tags.map((t, i) => `<span class="tagchip">#${esc(t)}<button data-a="deltag" data-i="${i}" aria-label="Remove tag">×</button></span>`).join("")}
+  <div class="tagbox">${d.tags.map((t, i) => tagChipHtml(t, i)).join("")}
     <input id="f_tagin" list="taglist" placeholder="Add a tag, press Enter"></div>
   <datalist id="taglist">${S.tags.map((t) => `<option value="${esc(t.name)}">`).join("")}</datalist>
   <label>Copy (one version per platform)</label>
   <div id="vars">${d.variants.map((v, i) => `<div class="varedit"><div class="vh"><input class="vl" value="${esc(v.label)}" placeholder="Label, e.g. Facebook / Instagram"><button class="btn sm" data-a="delvar" data-i="${i}">Remove</button></div><textarea class="vt" placeholder="Paste the post or email text">${esc(v.text)}</textarea></div>`).join("")}</div>
   <div style="margin-top:8px"><button class="btn sm" data-a="addvar">+ Add a version</button></div>
-  <div class="row2" style="margin-top:16px"><button class="btn pri" data-a="saveitem">Save</button><button class="btn" data-a="close">Cancel</button></div>
-  ${statusBtns}
   ${it ? `<div class="notes"><h3 style="font-size:15px">Notes</h3><div id="notesBox"></div></div>` : `<p class="msg">Save first, then you can add notes.</p>`}`;
+  return { head, body };
 }
 function renderNotesBox() {
   const box = $("#notesBox"); if (!box || !S.modal || !S.modal.id) return;
@@ -408,29 +428,150 @@ function renderNotesBox() {
     `<textarea id="noteIn" placeholder="Add a note…" style="min-height:70px;margin-top:8px">${esc(draftVal)}</textarea><div style="margin-top:6px"><button class="btn pri sm" data-a="addnote">Add note</button></div>`;
 }
 
-async function saveItem() {
-  syncDraft();
-  const m = S.modal, d = m.draft;
-  if (!d.title.trim()) return toast("Add a title");
-  if (!d.date || !d.time) return toast("Pick a date and time");
-  const row = {
+const draftError = (d) => {
+  if (!d.title.trim()) return "Add a title";
+  if (!d.date || !d.time) return "Pick a date and time";
+  const yr = +d.date.slice(0, 4); // a date box mid-typing can briefly read as year 0002
+  if (!(yr >= 2020 && yr <= 2100)) return "Check the date";
+  return "";
+};
+function rowFromDraft(d) {
+  return {
     title: d.title.trim(), kind: d.kind, scheduled_at: chicagoToDate(d.date, d.time).toISOString(),
     channels: d.channels.split(",").map((s) => s.trim()).filter(Boolean),
     variants: d.variants.filter((v) => v.text.trim() || v.label.trim()).map((v) => ({ label: v.label.trim() || "Text", text: v.text })),
     assignee_id: d.assignee_id || null,
   };
+}
+/** Write a draft onto an existing item (fields, tags, tagged people), then refresh. */
+async function persistItem(id, d) {
+  const row = rowFromDraft(d), tags = [...d.tags], people = [...d.people];
+  const r = await sb.from("hyf_items").update(row).eq("id", id); if (r.error) throw r.error;
+  await syncItemTags(id, tags);
+  await syncJoin("hyf_item_people", "item_id", id, "profile_id", people, S.itemPeople.filter((x) => x.item_id === id).map((x) => x.profile_id));
+  await reload();
+}
+/** New items only: create the record, then close. (Existing records autosave, see below.) */
+async function saveItem() {
+  syncDraft();
+  const m = S.modal, d = m.draft;
+  const bad = draftError(d); if (bad) return toast(bad);
+  const row = rowFromDraft(d);
   try {
-    let id = m.id;
-    if (id) { const r = await sb.from("hyf_items").update(row).eq("id", id); if (r.error) throw r.error; }
-    else { row.created_by = S.me.id; row.status = "todo"; const r = await sb.from("hyf_items").insert(row).select("id").single(); if (r.error) throw r.error; id = r.data.id; }
+    row.created_by = S.me.id; row.status = "todo";
+    const r = await sb.from("hyf_items").insert(row).select("id").single(); if (r.error) throw r.error;
+    const id = r.data.id;
     await syncItemTags(id, d.tags);
-    await syncJoin("hyf_item_people", "item_id", id, "profile_id", [...d.people], S.itemPeople.filter((x) => x.item_id === id).map((x) => x.profile_id));
+    await syncJoin("hyf_item_people", "item_id", id, "profile_id", [...d.people], []);
     closeModal(); await reload(); toast("Saved");
   } catch (e) { toast("Couldn't save: " + (e.message || e)); }
+}
+
+// ----- autosave (existing records): edits are written ~0.7s after the last change
+function setSaveState(m, text, kind = "") {
+  m.state = text; m.stateKind = kind;
+  if (S.modal !== m) return;
+  const el = $("#saveState"); if (el) { el.textContent = text; el.className = "savestate " + kind; }
+}
+/** Mark the open record as changed and schedule a save. */
+function touch(m) {
+  if (!m || m.type !== "item" || !m.id || m.cancelled) return;
+  m.dirty = true; setSaveState(m, "Saving…");
+  clearTimeout(m.timer); m.timer = setTimeout(() => queueSave(m), 700);
+}
+// Saves run one at a time; a save that finds nothing new to write is a no-op. Resolves true when everything is written.
+function queueSave(m) { m.chain = m.chain.then(() => doSave(m)); return m.chain; }
+async function doSave(m) {
+  if (m.cancelled || !m.dirty) return true;
+  if (S.modal === m) syncDraft(false);
+  const bad = draftError(m.draft);
+  if (bad) { setSaveState(m, bad + " to save", "warn"); return false; }
+  m.dirty = false;
+  setSaveState(m, "Saving…");
+  try {
+    await persistItem(m.id, m.draft);
+    m.changed = true;
+    if (!m.dirty) setSaveState(m, "All changes saved ✓", "ok");
+    return true;
+  } catch (e) { m.dirty = true; setSaveState(m, "Couldn't save: " + (e.message || e), "err"); return false; }
+}
+/** Write anything pending (including a tag typed but not yet entered). Resolves true if nothing is left unsaved. */
+async function flushItem() {
+  const m = S.modal; if (!m || m.type !== "item" || !m.id) return true;
+  clearTimeout(m.timer);
+  if (syncDraft(true)) { m.dirty = true; }
+  return queueSave(m);
+}
+async function saveAndClose() {
+  const m = S.modal; if (!m) return;
+  syncDraft(true);
+  const bad = draftError(m.draft); if (bad) return toast(bad);
+  m.dirty = true; clearTimeout(m.timer);
+  if (await queueSave(m)) { closeModal(); toast("Saved"); }
+}
+async function cancelItem() {
+  const m = S.modal; if (!m) return;
+  if (m.type !== "item" || !m.id) return closeModal();
+  clearTimeout(m.timer); m.cancelled = true; m.dirty = false;
+  await m.chain; // let a save that is already in flight finish, then undo it
+  if (m.changed) {
+    try { await persistItem(m.id, m.original); toast("Changes undone"); }
+    catch (e) { toast("Couldn't undo: " + (e.message || e)); }
+  }
+  closeModal();
+}
+/** Close the modal (✕, outside click, Esc). Records are saved first; if that fails the modal stays open. */
+async function dismissModal() {
+  const m = S.modal; if (!m) return;
+  if (m.type === "item" && m.id && !(await flushItem())) return toast("Couldn't save the last change — fix it, or press Cancel to undo");
+  if (S.modal === m) closeModal();
 }
 async function setStatus(id, status) {
   const r = await sb.from("hyf_items").update({ status }).eq("id", id);
   if (r.error) return toast("Couldn't update: " + r.error.message);
+  await reload();
+}
+
+// ----- assign popup (cards)
+function assignRows() {
+  const q = norm(S.assign.q);
+  return members()
+    .filter((p) => !q || norm(pName(p) + " " + p.email + " " + (S.profileTagNames.get(p.id) || []).join(" ")).includes(q))
+    .sort((a, b) => (b.id === S.me.id) - (a.id === S.me.id) || pName(a).localeCompare(pName(b))); // me first
+}
+function renderAssignList() {
+  const it = S.items.find((x) => x.id === S.assign.itemId), rows = assignRows();
+  $("#assignList").innerHTML = rows.length
+    ? rows.map((p) => `<button class="prow ${p.id === S.me.id ? "me" : ""}" data-a="pickassignee" data-id="${p.id}">${avatar(p, 26)}<span class="nm">${esc(pName(p))}${p.id === S.me.id ? " <em>(me)</em>" : ""}</span>${it && it.assignee_id === p.id ? `<span class="ck">✓</span>` : ""}</button>`).join("")
+    : `<div class="pnone">No matches</div>`;
+  $("#assignFoot").innerHTML = it && it.assignee_id ? `<button class="prow unas" data-a="pickassignee" data-id="">✕ Unassign</button>` : "";
+}
+function placePop(anchor) {
+  const pop = $("#assignPop"); if (!pop || !S.assign) return;
+  const a = anchor && anchor.isConnected ? anchor : document.querySelector(`#c-${CSS.escape(S.assign.itemId)} .assignbtn`);
+  if (!a) return; // card is re-rendering or filtered away: stay where we are
+  const r = a.getBoundingClientRect();
+  if (r.bottom < 0 || r.top > innerHeight) return closeAssign();
+  const w = pop.offsetWidth, h = pop.offsetHeight;
+  let top = r.bottom + 6;
+  if (top + h > innerHeight - 8 && r.top - h - 6 >= 8) top = r.top - h - 6; // flip above when there's no room below
+  pop.style.left = Math.min(Math.max(8, r.left), Math.max(8, innerWidth - w - 8)) + "px";
+  pop.style.top = Math.max(8, top) + "px";
+}
+function openAssign(itemId, anchor) {
+  S.assign = { itemId, q: "" };
+  $("#pop").innerHTML = `<div class="pop" id="assignPop"><input id="assignQ" type="search" placeholder="Search people…" autocomplete="off" aria-label="Search people"><div class="plist" id="assignList"></div><div id="assignFoot"></div></div>`;
+  renderAssignList(); placePop(anchor);
+  if (matchMedia("(pointer:fine)").matches) $("#assignQ").focus(); // don't pop the keyboard up on phones
+}
+function closeAssign() { S.assign = null; const h = $("#pop"); if (h) h.innerHTML = ""; }
+async function setAssignee(itemId, profileId) {
+  closeAssign();
+  const it = S.items.find((x) => x.id === itemId); if (!it || (it.assignee_id || null) === (profileId || null)) return;
+  it.assignee_id = profileId || null; decorate(); renderBanner(); renderList(); // show it right away
+  const r = await sb.from("hyf_items").update({ assignee_id: profileId || null }).eq("id", itemId);
+  if (r.error) toast("Couldn't assign: " + r.error.message);
+  else toast(!profileId ? "Unassigned" : profileId === S.me.id ? "Assigned to you" : "Assigned to " + pName(profById(profileId)));
   await reload();
 }
 
@@ -443,8 +584,7 @@ function openProfile() {
 function profileSheet() {
   const d = S.modal.draft;
   const prev = { ...S.me, display_name: d.name || S.me.display_name, avatar_emoji: d.emoji, avatar_url: d.url };
-  return `
-  <div class="hd"><h2>My profile</h2><button class="btn sm" data-a="close">✕</button></div>
+  const body = `
   <div class="prof"><div id="avprev">${avatar(prev, 72)}</div><div style="color:var(--mut);font-size:13px">${esc(S.me.email)}</div></div>
   <label>Display name</label><input id="p_name" value="${esc(d.name)}">
   <label>Picture</label>
@@ -456,6 +596,7 @@ function profileSheet() {
   <div class="tagbox">${d.tags.map((t, i) => `<span class="tagchip">#${esc(t)}<button data-a="delptag" data-i="${i}">×</button></span>`).join("")}<input id="p_tagin" list="taglist" placeholder="Add a tag, press Enter"></div>
   <datalist id="taglist">${S.tags.map((t) => `<option value="${esc(t.name)}">`).join("")}</datalist>
   <div class="row2" style="margin-top:16px"><button class="btn pri" data-a="saveprofile">Save</button><button class="btn" data-a="close">Cancel</button></div>`;
+  return { head: sheetHead("My profile"), body };
 }
 function syncProfileDraft() {
   const d = S.modal?.draft; if (!d || S.modal.type !== "profile") return;
@@ -498,8 +639,7 @@ async function saveProfile() {
 function openTeam() { S.menu = false; renderMenu(); S.modal = { type: "team" }; renderModal(); }
 function teamSheet() {
   const sorted = [...S.profiles].sort((a, b) => (a.role === "pending" ? -1 : 0) - (b.role === "pending" ? -1 : 0) || pName(a).localeCompare(pName(b)));
-  return `
-  <div class="hd"><h2>Team &amp; access</h2><button class="btn sm" data-a="close">✕</button></div>
+  const body = `
   <p class="msg" style="margin-top:0">People who sign in land on “pending” until an admin approves them. Only members and admins can see the tracker.</p>
   ${sorted.map((p) => `<div class="trow">${avatar(p, 34)}<div class="grow"><div class="nm">${esc(pName(p))} ${p.id === S.me.id ? '<span class="pill">you</span>' : ""}</div><div class="em">${esc(p.email)}${(S.profileTagNames.get(p.id) || []).length ? " · " + esc((S.profileTagNames.get(p.id) || []).map((t) => "#" + t).join(" ")) : ""}</div></div>
     ${p.role === "pending" ? `<button class="btn ok sm" data-a="setrole" data-id="${p.id}" data-r="member">Approve</button>` : ""}
@@ -509,6 +649,7 @@ function teamSheet() {
   ${S.invites.length ? S.invites.map((i) => `<div class="trow"><div class="grow"><div class="nm">${esc(i.email)}</div></div><span class="pill ${i.role === "admin" ? "admin" : ""}">${esc(i.role)}</span><button class="btn sm" data-a="delinvite" data-e="${esc(i.email)}">Remove</button></div>`).join("") : ""}
   <label style="margin-top:18px">Starter content</label>
   <button class="btn sm" data-a="seed">Import the Tackle Equipment Return schedule</button>`;
+  return { head: sheetHead("Team &amp; access"), body };
 }
 async function importSeed() {
   try {
@@ -572,13 +713,16 @@ const actions = {
   copy: (el) => { const it = S.items.find((x) => x.id === el.dataset.id); if (it) copyText(it.variants[+el.dataset.vi].text); },
   tag: (el) => { S.fTag = el.dataset.t; S.q = ""; const q = $("#q"); if (q) q.value = ""; renderBar(); renderList(); window.scrollTo({ top: 0, behavior: "smooth" }); },
   person: (el) => { S.fAssignee = el.dataset.id; S.q = ""; const q = $("#q"); if (q) q.value = ""; renderBar(); renderList(); window.scrollTo({ top: 0, behavior: "smooth" }); },
-  close: () => closeModal(),
-  ovclick: (el, e) => { if (e.target === el) closeModal(); },
-  addvar: () => { syncDraft(); S.modal.draft.variants.push({ label: "", text: "" }); renderModal(); },
-  delvar: (el) => { syncDraft(); S.modal.draft.variants.splice(+el.dataset.i, 1); renderModal(); },
-  deltag: (el) => { syncDraft(); S.modal.draft.tags.splice(+el.dataset.i, 1); renderModal(); },
-  saveitem: () => saveItem(),
-  mstatus: async (el) => { syncDraft(); await setStatus(S.modal.id, el.dataset.s); closeModal(); },
+  close: () => dismissModal(),
+  ovclick: (el, e) => { if (e.target === el) dismissModal(); },
+  addvar: () => { const m = S.modal; if (syncDraft(true)) touch(m); m.draft.variants.push({ label: "", text: "" }); renderModal(); },
+  delvar: (el) => { const m = S.modal; syncDraft(true); m.draft.variants.splice(+el.dataset.i, 1); touch(m); renderModal(); },
+  deltag: (el) => { const m = S.modal; syncDraft(true); m.draft.tags.splice(+el.dataset.i, 1); touch(m); renderModal(); },
+  saveitem: () => (S.modal?.id ? saveAndClose() : saveItem()),
+  cancelitem: () => cancelItem(),
+  mstatus: async (el) => { const m = S.modal; if (!(await flushItem())) return toast("Fix the highlighted problem first (or Cancel)"); await setStatus(m.id, el.dataset.s); closeModal(); },
+  assign: (el) => { if (S.assign && S.assign.itemId === el.dataset.id) closeAssign(); else openAssign(el.dataset.id, el); },
+  pickassignee: (el) => setAssignee(S.assign.itemId, el.dataset.id || null),
   mpurge: async () => { if (!confirm("Delete this item forever?")) return; const r = await sb.from("hyf_items").delete().eq("id", S.modal.id); if (r.error) return toast(r.error.message); closeModal(); reload(); },
   addnote: async () => {
     const body = ($("#noteIn")?.value || "").trim(); if (!body) return;
@@ -603,6 +747,7 @@ const actions = {
 document.addEventListener("click", (e) => {
   const el = e.target.closest("[data-a]");
   if (S.menu && !e.target.closest("#menuBox") && !(el && el.dataset.a === "menu")) { S.menu = false; renderMenu(); }
+  if (S.assign && !e.target.closest("#assignPop") && !(el && el.dataset.a === "assign")) closeAssign();
   if (!el) return;
   const fn = actions[el.dataset.a];
   if (fn && el.tagName !== "SELECT") fn(el, e);
@@ -618,10 +763,35 @@ document.addEventListener("change", async (e) => {
 });
 document.addEventListener("keydown", (e) => {
   if (e.key === "Enter" || e.key === ",") {
-    if (e.target.id === "f_tagin") { e.preventDefault(); syncDraft(); renderModal(); $("#f_tagin")?.focus(); }
+    if (e.target.id === "assignQ") { if (e.key === "Enter") { e.preventDefault(); const p = assignRows()[0]; if (p) setAssignee(S.assign.itemId, p.id); } }
+    else if (e.target.id === "f_tagin") { e.preventDefault(); const m = S.modal; if (syncDraft(true)) touch(m); renderModal(); $("#f_tagin")?.focus(); }
     else if (e.target.id === "p_tagin") { e.preventDefault(); syncProfileDraft(); renderModal(); $("#p_tagin")?.focus(); }
-  } else if (e.key === "Escape" && S.modal) closeModal();
+  } else if (e.key === "Escape") { if (S.assign) closeAssign(); else if (S.modal) dismissModal(); }
 });
+// autosave: any edit to a field of an existing record schedules a save
+function onItemEdit(e) {
+  const m = S.modal, t = e.target;
+  if (!m || m.type !== "item" || !m.id || !t.closest?.("#sheet")) return;
+  const isField = (t.id && t.id.startsWith("f_") && t.id !== "f_tagin") || t.classList.contains("vl") || t.classList.contains("vt") || t.name === "ppl";
+  if (isField) touch(m);
+}
+document.addEventListener("input", onItemEdit);
+document.addEventListener("change", onItemEdit);
+// a tag typed but not entered becomes a chip when you leave the box (no re-render, so a button click isn't lost)
+document.addEventListener("focusout", (e) => {
+  const m = S.modal, t = e.target;
+  if (!m || m.type !== "item" || !m.id || t.id !== "f_tagin") return;
+  const v = t.value.trim().replace(/^#/, "").replace(/,$/, ""); if (!v) return;
+  t.value = "";
+  if (m.draft.tags.some((x) => x.toLowerCase() === v.toLowerCase())) return;
+  m.draft.tags.push(v);
+  t.insertAdjacentHTML("beforebegin", tagChipHtml(v, m.draft.tags.length - 1));
+  touch(m);
+});
+// the assign popup: filter as you type, keep it attached to its button while the page scrolls
+document.addEventListener("input", (e) => { if (e.target.id === "assignQ" && S.assign) { S.assign.q = e.target.value; renderAssignList(); placePop(); } });
+window.addEventListener("scroll", () => { if (S.assign) placePop(); }, { passive: true });
+window.addEventListener("resize", () => { if (S.assign) placePop(); });
 document.addEventListener("input", (e) => {
   if (e.target.id === "p_name" || e.target.id === "p_emoji") { // live avatar preview without re-rendering the form
     const d = S.modal?.draft; if (!d) return;
